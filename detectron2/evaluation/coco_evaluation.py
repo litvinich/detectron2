@@ -135,7 +135,6 @@ class COCOEvaluator(DatasetEvaluator):
             file_path = os.path.join(self._output_dir, "instances_predictions.pth")
             with PathManager.open(file_path, "wb") as f:
                 torch.save(predictions, f)
-
         self._results = OrderedDict()
         if "proposals" in predictions[0]:
             self._eval_box_proposals(predictions)

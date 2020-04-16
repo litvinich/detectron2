@@ -19,6 +19,7 @@ from .box_head import build_box_head
 from .fast_rcnn import FastRCNNOutputLayers
 from .keypoint_head import build_keypoint_head
 from .mask_head import build_mask_head
+from .classifacation_losses import build_classification_loss
 
 ROI_HEADS_REGISTRY = Registry("ROI_HEADS")
 ROI_HEADS_REGISTRY.__doc__ = """
@@ -140,9 +141,7 @@ class ROIHeads(torch.nn.Module):
 
         # Matcher to assign box proposals to gt boxes
         self.proposal_matcher = Matcher(
-            cfg.MODEL.ROI_HEADS.IOU_THRESHOLDS,
-            cfg.MODEL.ROI_HEADS.IOU_LABELS,
-            allow_low_quality_matches=False,
+            cfg.MODEL.ROI_HEADS.IOU_THRESHOLDS, cfg.MODEL.ROI_HEADS.IOU_LABELS, allow_low_quality_matches=False,
         )
 
     def _sample_proposals(
@@ -184,9 +183,7 @@ class ROIHeads(torch.nn.Module):
         return sampled_idxs, gt_classes[sampled_idxs]
 
     @torch.no_grad()
-    def label_and_sample_proposals(
-        self, proposals: List[Instances], targets: List[Instances]
-    ) -> List[Instances]:
+    def label_and_sample_proposals(self, proposals: List[Instances], targets: List[Instances]) -> List[Instances]:
         """
         Prepare some proposals to be used to train the ROI heads.
         It performs box matching between `proposals` and `targets`, and assigns
@@ -231,9 +228,7 @@ class ROIHeads(torch.nn.Module):
         num_bg_samples = []
         for proposals_per_image, targets_per_image in zip(proposals, targets):
             has_gt = len(targets_per_image) > 0
-            match_quality_matrix = pairwise_iou(
-                targets_per_image.gt_boxes, proposals_per_image.proposal_boxes
-            )
+            match_quality_matrix = pairwise_iou(targets_per_image.gt_boxes, proposals_per_image.proposal_boxes)
             matched_idxs, matched_labels = self.proposal_matcher(match_quality_matrix)
             sampled_idxs, gt_classes = self._sample_proposals(
                 matched_idxs, matched_labels, targets_per_image.gt_classes
@@ -255,9 +250,7 @@ class ROIHeads(torch.nn.Module):
                     if trg_name.startswith("gt_") and not proposals_per_image.has(trg_name):
                         proposals_per_image.set(trg_name, trg_value[sampled_targets])
             else:
-                gt_boxes = Boxes(
-                    targets_per_image.gt_boxes.tensor.new_zeros((len(sampled_idxs), 4))
-                )
+                gt_boxes = Boxes(targets_per_image.gt_boxes.tensor.new_zeros((len(sampled_idxs), 4)))
                 proposals_per_image.gt_boxes = gt_boxes
 
             num_bg_samples.append((gt_classes == self.num_classes).sum().item())
@@ -331,21 +324,16 @@ class Res5ROIHeads(ROIHeads):
         assert not cfg.MODEL.KEYPOINT_ON
 
         self.pooler = ROIPooler(
-            output_size=pooler_resolution,
-            scales=pooler_scales,
-            sampling_ratio=sampling_ratio,
-            pooler_type=pooler_type,
+            output_size=pooler_resolution, scales=pooler_scales, sampling_ratio=sampling_ratio, pooler_type=pooler_type,
         )
 
         self.res5, out_channels = self._build_res5_block(cfg)
         self.box_predictor = FastRCNNOutputLayers(
             cfg, ShapeSpec(channels=out_channels, height=1, width=1)
         )
-
         if self.mask_on:
             self.mask_head = build_mask_head(
-                cfg,
-                ShapeSpec(channels=out_channels, width=pooler_resolution, height=pooler_resolution),
+                cfg, ShapeSpec(channels=out_channels, width=pooler_resolution, height=pooler_resolution),
             )
 
     def _build_res5_block(self, cfg):
@@ -399,9 +387,7 @@ class Res5ROIHeads(ROIHeads):
             del features
             losses = self.box_predictor.losses(predictions, proposals)
             if self.mask_on:
-                proposals, fg_selection_masks = select_foreground_proposals(
-                    proposals, self.num_classes
-                )
+                proposals, fg_selection_masks = select_foreground_proposals(proposals, self.num_classes)
                 # Since the ROI feature transform is shared between boxes and masks,
                 # we don't need to recompute features. The mask loss is only defined
                 # on foreground proposals, so we need to select out the foreground
@@ -476,10 +462,7 @@ class StandardROIHeads(ROIHeads):
         in_channels = in_channels[0]
 
         self.box_pooler = ROIPooler(
-            output_size=pooler_resolution,
-            scales=pooler_scales,
-            sampling_ratio=sampling_ratio,
-            pooler_type=pooler_type,
+            output_size=pooler_resolution, scales=pooler_scales, sampling_ratio=sampling_ratio, pooler_type=pooler_type,
         )
         # Here we split "box head" and "box predictor", which is mainly due to historical reasons.
         # They are used together so the "box predictor" layers should be part of the "box head".
@@ -503,10 +486,7 @@ class StandardROIHeads(ROIHeads):
         in_channels = [input_shape[f].channels for f in self.in_features][0]
 
         self.mask_pooler = ROIPooler(
-            output_size=pooler_resolution,
-            scales=pooler_scales,
-            sampling_ratio=sampling_ratio,
-            pooler_type=pooler_type,
+            output_size=pooler_resolution, scales=pooler_scales, sampling_ratio=sampling_ratio, pooler_type=pooler_type,
         )
         self.mask_head = build_mask_head(
             cfg, ShapeSpec(channels=in_channels, width=pooler_resolution, height=pooler_resolution)
@@ -526,10 +506,7 @@ class StandardROIHeads(ROIHeads):
         in_channels = [input_shape[f].channels for f in self.in_features][0]
 
         self.keypoint_pooler = ROIPooler(
-            output_size=pooler_resolution,
-            scales=pooler_scales,
-            sampling_ratio=sampling_ratio,
-            pooler_type=pooler_type,
+            output_size=pooler_resolution, scales=pooler_scales, sampling_ratio=sampling_ratio, pooler_type=pooler_type,
         )
         self.keypoint_head = build_keypoint_head(
             cfg, ShapeSpec(channels=in_channels, width=pooler_resolution, height=pooler_resolution)

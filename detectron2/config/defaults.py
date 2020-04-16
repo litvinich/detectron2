@@ -259,6 +259,13 @@ _C.MODEL.ROI_HEADS.BATCH_SIZE_PER_IMAGE = 512
 # Target fraction of RoI minibatch that is labeled foreground (i.e. class > 0)
 _C.MODEL.ROI_HEADS.POSITIVE_FRACTION = 0.25
 
+# Losses info
+_C.MODEL.ROI_HEADS.CLASSIFICATION_LOSS = CN()
+_C.MODEL.ROI_HEADS.CLASSIFICATION_LOSS.NAME = "CrossEntropyLoss"
+_C.MODEL.ROI_HEADS.CLASSIFICATION_LOSS.LABEL_SMOOTHING = 0.0
+_C.MODEL.ROI_HEADS.CLASSIFICATION_LOSS.GAMMA = 2.0
+_C.MODEL.ROI_HEADS.CLASSIFICATION_LOSS.ALPHA = 0.5
+
 # Only used on test mode
 
 # Minimum score threshold (assuming scores in a [0, 1] range); a value chosen to

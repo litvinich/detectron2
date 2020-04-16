@@ -113,7 +113,7 @@ class TensorboardXWriter(EventWriter):
     Write all scalars to a tensorboard file.
     """
 
-    def __init__(self, log_dir: str, window_size: int = 20, **kwargs):
+    def __init__(self, log_dir: str, window_size: int = 1000, **kwargs):
         """
         Args:
             log_dir (str): the directory to save the output events
@@ -329,8 +329,10 @@ class EventStorage:
         This provides a default behavior that other writers can use.
         """
         result = {}
-        for k, v in self._latest_scalars.items():
-            result[k] = self._history[k].median(window_size) if self._smoothing_hints[k] else v
+        # for k, v in self._latest_scalars.items():
+        #     result[k] = self._history[k].median(window_size) if self._smoothing_hints[k] else v
+        for k, v in self._history.items():
+            result[k] = self._history[k].median(window_size) if self._smoothing_hints[k] else v.latest()
         return result
 
     def smoothing_hints(self):

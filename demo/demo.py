@@ -2,8 +2,12 @@
 import argparse
 import glob
 import multiprocessing as mp
+import numpy as np
 import os
+import queue
+import threading
 import time
+from typing import NoReturn
 import cv2
 import tqdm
 
@@ -15,6 +19,33 @@ from predictor import VisualizationDemo
 
 # constants
 WINDOW_NAME = "COCO detections"
+
+
+class VideoCapture():
+    def __init__(self, name: str) -> NoReturn:
+        self.cap = cv2.VideoCapture(name)
+        self.q = queue.Queue(1)
+        t = threading.Thread(target=self._reader)
+        t.daemon = True
+        t.start()
+
+    def _reader(self) -> NoReturn:
+        while True:
+            ret, frame = self.cap.read()
+            if not ret:
+                break
+            if not self.q.empty():
+                try:
+                    self.q.get_nowait()  # discard previous (unprocessed) frame
+                except queue.Queue.Empty:
+                    pass
+            self.q.put_nowait((ret, frame))
+
+    def isOpened(self) -> bool:
+        return True
+
+    def read(self) -> np.ndarray:
+        return self.q.get()
 
 
 def setup_cfg(args):
@@ -53,10 +84,7 @@ def get_parser():
     )
 
     parser.add_argument(
-        "--confidence-threshold",
-        type=float,
-        default=0.5,
-        help="Minimum score for instance predictions to be shown",
+        "--confidence-threshold", type=float, default=0.5, help="Minimum score for instance predictions to be shown",
     )
     parser.add_argument(
         "--opts",
@@ -112,8 +140,8 @@ if __name__ == "__main__":
                     break  # esc to quit
     elif args.webcam:
         assert args.input is None, "Cannot have both --input and --webcam!"
-        assert args.output is None, "output not yet supported with --webcam!"
-        cam = cv2.VideoCapture(0)
+        # assert args.output is None, "output not yet supported with --webcam!"
+        cam = VideoCapture("rtsp://admin:admin1234@192.168.0.70:554/live")
         for vis in tqdm.tqdm(demo.run_on_video(cam)):
             cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
             cv2.imshow(WINDOW_NAME, vis)

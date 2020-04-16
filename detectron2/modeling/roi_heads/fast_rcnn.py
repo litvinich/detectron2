@@ -1,5 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import logging
+import numpy as np
 import torch
 from fvcore.nn import smooth_l1_loss
 from torch import nn
@@ -8,8 +9,11 @@ from torch.nn import functional as F
 from detectron2.config import configurable
 from detectron2.layers import Linear, ShapeSpec, batched_nms, cat
 from detectron2.modeling.box_regression import Box2BoxTransform
+from detectron2.modeling.roi_heads.classifacation_losses import cross_entropy_label_smoothing
 from detectron2.structures import Boxes, Instances
 from detectron2.utils.events import get_event_storage
+from .classifacation_losses import build_classification_loss
+
 
 logger = logging.getLogger(__name__)
 
@@ -74,9 +78,7 @@ def fast_rcnn_inference(boxes, scores, image_shapes, score_thresh, nms_thresh, t
     return [x[0] for x in result_per_image], [x[1] for x in result_per_image]
 
 
-def fast_rcnn_inference_single_image(
-    boxes, scores, image_shape, score_thresh, nms_thresh, topk_per_image
-):
+def fast_rcnn_inference_single_image(boxes, scores, image_shape, score_thresh, nms_thresh, topk_per_image):
     """
     Single-image inference. Return bounding-box detection results by thresholding
     on scores and applying non-maximum suppression (NMS).
@@ -136,6 +138,7 @@ class FastRCNNOutputs(object):
         pred_class_logits,
         pred_proposal_deltas,
         proposals,
+        classification_loss,
         smooth_l1_beta=0,
     ):
         """
@@ -165,6 +168,8 @@ class FastRCNNOutputs(object):
         self.pred_class_logits = pred_class_logits
         self.pred_proposal_deltas = pred_proposal_deltas
         self.smooth_l1_beta = smooth_l1_beta
+
+        self.classification_loss = classification_loss
         self.image_shapes = [x.image_size for x in proposals]
 
         if len(proposals):
@@ -223,7 +228,8 @@ class FastRCNNOutputs(object):
             )
         else:
             self._log_accuracy()
-            return F.cross_entropy(self.pred_class_logits, self.gt_classes, reduction="mean")
+            #return F.cross_entropy(self.pred_class_logits, self.gt_classes, reduction="mean")
+            return self.classification_loss(self.pred_class_logits, self.gt_classes)
 
     def smooth_l1_loss(self):
         """
@@ -376,9 +382,7 @@ class FastRCNNOutputs(object):
         scores = self.predict_probs()
         image_shapes = self.image_shapes
 
-        return fast_rcnn_inference(
-            boxes, scores, image_shapes, score_thresh, nms_thresh, topk_per_image
-        )
+        return fast_rcnn_inference(boxes, scores, image_shapes, score_thresh, nms_thresh, topk_per_image)
 
 
 class FastRCNNOutputLayers(nn.Module):
@@ -395,6 +399,7 @@ class FastRCNNOutputLayers(nn.Module):
         *,
         box2box_transform,
         num_classes,
+        classification_loss=torch.nn.CrossEntropyLoss,
         cls_agnostic_bbox_reg=False,
         smooth_l1_beta=0.0,
         test_score_thresh=0.0,
@@ -429,12 +434,13 @@ class FastRCNNOutputLayers(nn.Module):
         nn.init.normal_(self.bbox_pred.weight, std=0.001)
         for l in [self.cls_score, self.bbox_pred]:
             nn.init.constant_(l.bias, 0)
-
+        
         self.box2box_transform = box2box_transform
         self.smooth_l1_beta = smooth_l1_beta
         self.test_score_thresh = test_score_thresh
         self.test_nms_thresh = test_nms_thresh
         self.test_topk_per_image = test_topk_per_image
+        self.classification_loss = classification_loss
 
     @classmethod
     def from_config(cls, cfg, input_shape):
@@ -447,7 +453,8 @@ class FastRCNNOutputLayers(nn.Module):
             "smooth_l1_beta"        : cfg.MODEL.ROI_BOX_HEAD.SMOOTH_L1_BETA,
             "test_score_thresh"     : cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST,
             "test_nms_thresh"       : cfg.MODEL.ROI_HEADS.NMS_THRESH_TEST,
-            "test_topk_per_image"   : cfg.TEST.DETECTIONS_PER_IMAGE
+            "test_topk_per_image"   : cfg.TEST.DETECTIONS_PER_IMAGE,
+            "classification_loss"   : build_classification_loss(cfg)
             # fmt: on
         }
 
@@ -473,29 +480,29 @@ class FastRCNNOutputLayers(nn.Module):
         """
         scores, proposal_deltas = predictions
         return FastRCNNOutputs(
-            self.box2box_transform, scores, proposal_deltas, proposals, self.smooth_l1_beta
+            self.box2box_transform, scores, proposal_deltas, proposals, self.classification_loss, self.smooth_l1_beta
         ).losses()
 
     def inference(self, predictions, proposals):
         scores, proposal_deltas = predictions
         return FastRCNNOutputs(
-            self.box2box_transform, scores, proposal_deltas, proposals, self.smooth_l1_beta
+            self.box2box_transform, scores, proposal_deltas, proposals, self.classification_loss, self.smooth_l1_beta
         ).inference(self.test_score_thresh, self.test_nms_thresh, self.test_topk_per_image)
 
     def predict_boxes_for_gt_classes(self, predictions, proposals):
         scores, proposal_deltas = predictions
         return FastRCNNOutputs(
-            self.box2box_transform, scores, proposal_deltas, proposals, self.smooth_l1_beta
+            self.box2box_transform, scores, proposal_deltas, proposals, self.classification_loss, self.smooth_l1_beta
         ).predict_boxes_for_gt_classes()
 
     def predict_boxes(self, predictions, proposals):
         scores, proposal_deltas = predictions
         return FastRCNNOutputs(
-            self.box2box_transform, scores, proposal_deltas, proposals, self.smooth_l1_beta
+            self.box2box_transform, scores, proposal_deltas, proposals, self.classification_loss, self.smooth_l1_beta
         ).predict_boxes()
 
     def predict_probs(self, predictions, proposals):
         scores, proposal_deltas = predictions
         return FastRCNNOutputs(
-            self.box2box_transform, scores, proposal_deltas, proposals, self.smooth_l1_beta
+            self.box2box_transform, scores, proposal_deltas, proposals, self.classification_loss, self.smooth_l1_beta
         ).predict_probs()

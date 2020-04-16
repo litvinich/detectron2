@@ -154,7 +154,7 @@ def inference_on_dataset(model, data_loader, evaluator):
                     "Inference done {}/{}. {:.4f} s / img. ETA={}".format(
                         idx + 1, total, seconds_per_img, str(eta)
                     ),
-                    n=5,
+                    n=30,
                 )
 
     # Measure the time only for this worker (before the synchronization barrier)

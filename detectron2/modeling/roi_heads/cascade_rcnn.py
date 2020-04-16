@@ -11,7 +11,8 @@ from ..box_regression import Box2BoxTransform
 from ..matcher import Matcher
 from ..poolers import ROIPooler
 from .box_head import build_box_head
-from .fast_rcnn import FastRCNNOutputLayers, fast_rcnn_inference
+from .classifacation_losses import build_classification_loss
+from .fast_rcnn import FastRCNNOutputLayers, FastRCNNOutputs, fast_rcnn_inference
 from .roi_heads import ROI_HEADS_REGISTRY, StandardROIHeads
 
 
@@ -42,6 +43,7 @@ class CascadeROIHeads(StandardROIHeads):
             "CascadeROIHeads only support class-agnostic regression now!"
         assert cascade_ious[0] == cfg.MODEL.ROI_HEADS.IOU_THRESHOLDS[0]
         # fmt: on
+        self.classification_loss = build_classification_loss(cfg)
 
         in_channels = [input_shape[f].channels for f in self.in_features]
         # Check all channel counts are equal
@@ -54,9 +56,7 @@ class CascadeROIHeads(StandardROIHeads):
             sampling_ratio=sampling_ratio,
             pooler_type=pooler_type,
         )
-        pooled_shape = ShapeSpec(
-            channels=in_channels, width=pooler_resolution, height=pooler_resolution
-        )
+        pooled_shape = ShapeSpec(channels=in_channels, width=pooler_resolution, height=pooler_resolution)
 
         self.box_head = nn.ModuleList()
         self.box_predictor = nn.ModuleList()
@@ -78,9 +78,7 @@ class CascadeROIHeads(StandardROIHeads):
                 # The first matching is done by the matcher of ROIHeads (self.proposal_matcher).
                 self.proposal_matchers.append(None)
             else:
-                self.proposal_matchers.append(
-                    Matcher([cascade_ious[k]], [0, 1], allow_low_quality_matches=False)
-                )
+                self.proposal_matchers.append(Matcher([cascade_ious[k]], [0, 1], allow_low_quality_matches=False))
 
     def forward(self, images, features, proposals, targets=None):
         del images
@@ -170,9 +168,7 @@ class CascadeROIHeads(StandardROIHeads):
         """
         num_fg_samples, num_bg_samples = [], []
         for proposals_per_image, targets_per_image in zip(proposals, targets):
-            match_quality_matrix = pairwise_iou(
-                targets_per_image.gt_boxes, proposals_per_image.proposal_boxes
-            )
+            match_quality_matrix = pairwise_iou(targets_per_image.gt_boxes, proposals_per_image.proposal_boxes)
             # proposal_labels are 0 or 1
             matched_idxs, proposal_labels = self.proposal_matchers[stage](match_quality_matrix)
             if len(targets_per_image) > 0:
@@ -182,9 +178,7 @@ class CascadeROIHeads(StandardROIHeads):
                 gt_boxes = targets_per_image.gt_boxes[matched_idxs]
             else:
                 gt_classes = torch.zeros_like(matched_idxs) + self.num_classes
-                gt_boxes = Boxes(
-                    targets_per_image.gt_boxes.tensor.new_zeros((len(proposals_per_image), 4))
-                )
+                gt_boxes = Boxes(targets_per_image.gt_boxes.tensor.new_zeros((len(proposals_per_image), 4)))
             proposals_per_image.gt_classes = gt_classes
             proposals_per_image.gt_boxes = gt_boxes
 
@@ -194,12 +188,10 @@ class CascadeROIHeads(StandardROIHeads):
         # Log the number of fg/bg samples in each stage
         storage = get_event_storage()
         storage.put_scalar(
-            "stage{}/roi_head/num_fg_samples".format(stage),
-            sum(num_fg_samples) / len(num_fg_samples),
+            "stage{}/roi_head/num_fg_samples".format(stage), sum(num_fg_samples) / len(num_fg_samples),
         )
         storage.put_scalar(
-            "stage{}/roi_head/num_bg_samples".format(stage),
-            sum(num_bg_samples) / len(num_bg_samples),
+            "stage{}/roi_head/num_bg_samples".format(stage), sum(num_bg_samples) / len(num_bg_samples),
         )
         return proposals
 

@@ -68,16 +68,12 @@ Run on multiple machines:
     )
     parser.add_argument("--config-file", default="", metavar="FILE", help="path to config file")
     parser.add_argument(
-        "--resume",
-        action="store_true",
-        help="whether to attempt to resume from the checkpoint directory",
+        "--resume", action="store_true", help="whether to attempt to resume from the checkpoint directory",
     )
     parser.add_argument("--eval-only", action="store_true", help="perform evaluation only")
     parser.add_argument("--num-gpus", type=int, default=1, help="number of gpus *per machine*")
-    parser.add_argument("--num-machines", type=int, default=1, help="total number of machines")
-    parser.add_argument(
-        "--machine-rank", type=int, default=0, help="the rank of this machine (unique per machine)"
-    )
+    parser.add_argument("--num-machines", type=int, default=1)
+    parser.add_argument("--machine-rank", type=int, default=0, help="the rank of this machine (unique per machine)")
 
     # PyTorch still may leave orphan processes in multi-gpu training.
     # Therefore we use a deterministic way to obtain port,
@@ -90,10 +86,7 @@ Run on multiple machines:
         "https://pytorch.org/docs/stable/distributed.html for details.",
     )
     parser.add_argument(
-        "opts",
-        help="Modify config options using the command-line",
-        default=None,
-        nargs=argparse.REMAINDER,
+        "opts", help="Modify config options using the command-line", default=None, nargs=argparse.REMAINDER,
     )
     return parser
 
@@ -119,21 +112,20 @@ def default_setup(cfg, args):
     logger = setup_logger(output_dir, distributed_rank=rank)
 
     logger.info("Rank of current process: {}. World size: {}".format(rank, comm.get_world_size()))
-    logger.info("Environment info:\n" + collect_env_info())
+    # logger.info("Environment info:\n" + collect_env_info())
 
     logger.info("Command line arguments: " + str(args))
-    if hasattr(args, "config_file") and args.config_file != "":
-        logger.info(
-            "Contents of args.config_file={}:\n{}".format(
-                args.config_file, PathManager.open(args.config_file, "r").read()
-            )
-        )
-
-    logger.info("Running with full config:\n{}".format(cfg))
+    # if hasattr(args, "config_file") and args.config_file != "":
+    #     logger.info(
+    #         "Contents of args.config_file={}:\n{}".format(
+    #             args.config_file, PathManager.open(args.config_file, "r").read()
+    #         )
+    #     )
+    # logger.info("Running with full config:\n{}".format(cfg))
     if comm.is_main_process() and output_dir:
         # Note: some of our scripts may expect the existence of
         # config.yaml in output directory
-        path = os.path.join(output_dir, "config.yaml")
+        path = os.path.join(output_dir, "configs", "config.yaml")
         with PathManager.open(path, "w") as f:
             f.write(cfg.dump())
         logger.info("Full config saved to {}".format(path))
@@ -273,9 +265,7 @@ class DefaultTrainer(SimpleTrainer):
 
         # For training, wrap with DDP. But don't need this for inference.
         if comm.get_world_size() > 1:
-            model = DistributedDataParallel(
-                model, device_ids=[comm.get_local_rank()], broadcast_buffers=False
-            )
+            model = DistributedDataParallel(model, device_ids=[comm.get_local_rank()], broadcast_buffers=False)
         super().__init__(model, data_loader, optimizer)
 
         self.scheduler = self.build_lr_scheduler(cfg, optimizer)
@@ -284,7 +274,7 @@ class DefaultTrainer(SimpleTrainer):
         self.checkpointer = DetectionCheckpointer(
             # Assume you want to save checkpoints together with logs/statistics
             model,
-            cfg.OUTPUT_DIR,
+            cfg.OUTPUT_DIR + "/checkpoints",
             optimizer=optimizer,
             scheduler=self.scheduler,
         )
@@ -309,6 +299,11 @@ class DefaultTrainer(SimpleTrainer):
         # The checkpoint stores the training iteration that just finished, thus we start
         # at the next iteration (or iter zero if there's no checkpoint).
         self.start_iter += 1
+# =======
+#         self.start_iter = (
+#             self.checkpointer.resume_or_load(self.cfg.MODEL.WEIGHTS, resume=resume).get("iteration", -1) + 1
+#         )
+# >>>>>>> Stashed changes
 
     def build_hooks(self):
         """
@@ -354,7 +349,7 @@ class DefaultTrainer(SimpleTrainer):
 
         if comm.is_main_process():
             # run writers in the end, so that evaluation metrics are written
-            ret.append(hooks.PeriodicWriter(self.build_writers(), period=20))
+            ret.append(hooks.PeriodicWriter(self.build_writers(), period=100))
         return ret
 
     def build_writers(self):
@@ -384,7 +379,7 @@ class DefaultTrainer(SimpleTrainer):
             # It may not always print what you want to see, since it prints "common" metrics only.
             CommonMetricPrinter(self.max_iter),
             JSONWriter(os.path.join(self.cfg.OUTPUT_DIR, "metrics.json")),
-            TensorboardXWriter(self.cfg.OUTPUT_DIR),
+            TensorboardXWriter(self.cfg.OUTPUT_DIR + "/tensorboard_logs"),
         ]
 
     def train(self):
@@ -396,9 +391,7 @@ class DefaultTrainer(SimpleTrainer):
         """
         super().train(self.start_iter, self.max_iter)
         if len(self.cfg.TEST.EXPECTED_RESULTS) and comm.is_main_process():
-            assert hasattr(
-                self, "_last_eval_results"
-            ), "No evaluation results obtained during training!"
+            assert hasattr(self, "_last_eval_results"), "No evaluation results obtained during training!"
             verify_results(self.cfg, self._last_eval_results)
             return self._last_eval_results
 
@@ -413,7 +406,7 @@ class DefaultTrainer(SimpleTrainer):
         """
         model = build_model(cfg)
         logger = logging.getLogger(__name__)
-        logger.info("Model:\n{}".format(model))
+        # logger.info("Model:\n{}".format(model))
         return model
 
     @classmethod
@@ -474,7 +467,7 @@ Alternatively, you can call evaluation functions yourself (see Colab balloon tut
         )
 
     @classmethod
-    def test(cls, cfg, model, evaluators=None):
+    def test(cls, cfg, model, evaluators=None) -> OrderedDict:
         """
         Args:
             cfg (CfgNode):
@@ -490,9 +483,7 @@ Alternatively, you can call evaluation functions yourself (see Colab balloon tut
         if isinstance(evaluators, DatasetEvaluator):
             evaluators = [evaluators]
         if evaluators is not None:
-            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(
-                len(cfg.DATASETS.TEST), len(evaluators)
-            )
+            assert len(cfg.DATASETS.TEST) == len(evaluators), "{} != {}".format(len(cfg.DATASETS.TEST), len(evaluators))
 
         results = OrderedDict()
         for idx, dataset_name in enumerate(cfg.DATASETS.TEST):
@@ -516,9 +507,7 @@ Alternatively, you can call evaluation functions yourself (see Colab balloon tut
             if comm.is_main_process():
                 assert isinstance(
                     results_i, dict
-                ), "Evaluator must return a dict on the main process. Got {} instead.".format(
-                    results_i
-                )
+                ), "Evaluator must return a dict on the main process. Got {} instead.".format(results_i)
                 logger.info("Evaluation results for {} in csv format:".format(dataset_name))
                 print_csv_format(results_i)
 
